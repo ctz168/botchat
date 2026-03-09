@@ -3,12 +3,12 @@ import { message } from 'telegraf/filters';
 
 export interface TelegramBotConfig {
   token: string;
-  onMessage: (chatId: number, text: string) => Promise<string>;
+  onMessage: (chatId: number, text: string, updateMessage: (text: string) => Promise<void>) => Promise<string>;
 }
 
 export class TelegramBotService {
   private bot: Telegraf;
-  private onMessage: (chatId: number, text: string) => Promise<string>;
+  private onMessage: (chatId: number, text: string, updateMessage: (text: string) => Promise<void>) => Promise<string>;
   private authorizedChats: Set<number> = new Set();
   private isRunning: boolean = false;
 
@@ -29,6 +29,7 @@ export class TelegramBotService {
       await ctx.reply(
         '🤖 Bot桥接服务已启动！\n\n' +
         '发送任何消息，我将转发到chat.z.ai并返回响应。\n\n' +
+        '✨ 支持流式输出，实时显示AI响应！\n\n' +
         '命令列表:\n' +
         '/start - 启动服务\n' +
         '/status - 查看状态\n' +
@@ -80,19 +81,52 @@ export class TelegramBotService {
 
         console.log(`📱 Telegram收到消息 [${chatId}]: ${text.substring(0, 50)}...`);
 
-        // 调用消息处理回调
-        const response = await this.onMessage(chatId, text);
-
-        // 发送响应
-        if (response && response.trim().length > 0) {
-          // Telegram消息长度限制为4096字符
-          const chunks = this.splitMessage(response, 4000);
-          for (const chunk of chunks) {
-            await ctx.reply(chunk);
+        // 创建一个可编辑的消息
+        let messageToDelete: any = null;
+        let currentMessageText = '';
+        
+        // 更新消息的函数
+        const updateMessage = async (newText: string) => {
+          try {
+            // 发送"正在输入"状态
+            await ctx.sendChatAction('typing');
+            
+            if (messageToDelete === null) {
+              // 首次发送消息
+              messageToDelete = await ctx.reply(newText);
+              currentMessageText = newText;
+            } else if (newText !== currentMessageText) {
+              // 编辑现有消息
+              // Telegram消息长度限制
+              const textToSend = newText.length > 4000 
+                ? newText.substring(0, 4000) + '\n\n... (消息过长，已截断)' 
+                : newText;
+              
+              try {
+                await this.bot.telegram.editMessageText(
+                  chatId,
+                  messageToDelete.message_id,
+                  undefined,
+                  textToSend
+                );
+                currentMessageText = newText;
+              } catch (editError: any) {
+                // 如果消息内容相同，Telegram会报错，忽略
+                if (!editError.description?.includes('exactly the same')) {
+                  console.log('⚠️ 编辑消息失败，发送新消息');
+                  messageToDelete = await ctx.reply(textToSend);
+                  currentMessageText = newText;
+                }
+              }
+            }
+          } catch (error) {
+            console.error('更新消息失败:', error);
           }
-        } else {
-          await ctx.reply('⚠️ 未收到有效响应，请稍后重试。');
-        }
+        };
+
+        // 调用消息处理回调（带流式更新）
+        await this.onMessage(chatId, text, updateMessage);
+
       } catch (error) {
         console.error('处理Telegram消息失败:', error);
         await ctx.reply('❌ 处理消息时发生错误，请稍后重试。');

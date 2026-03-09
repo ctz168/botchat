@@ -14,7 +14,7 @@ export class BridgeService {
   private isInitialized: boolean = false;
   private conversationContext: Map<number, string[]> = new Map();
   private isProcessing: boolean = false;
-  private messageQueue: Array<{chatId: number, text: string, resolve: (response: string) => void}> = [];
+  private messageQueue: Array<{chatId: number, text: string, updateMessage: (text: string) => Promise<void>, resolve: () => void}> = [];
 
   constructor(private config: BridgeConfig) {
     this.browserController = new BrowserController({
@@ -60,10 +60,15 @@ export class BridgeService {
     console.log('✅ 桥接服务初始化完成');
   }
 
-  private async handleTelegramMessage(chatId: number, text: string): Promise<string> {
+  private async handleTelegramMessage(
+    chatId: number, 
+    text: string, 
+    updateMessage: (text: string) => Promise<void>
+  ): Promise<string> {
     console.log(`📨 收到Telegram消息 [${chatId}]: ${text.substring(0, 50)}...`);
 
     if (!this.browserController.isReady()) {
+      await updateMessage('⚠️ 浏览器服务未就绪，请稍后重试。');
       return '⚠️ 浏览器服务未就绪，请稍后重试。';
     }
 
@@ -71,7 +76,7 @@ export class BridgeService {
     if (this.isProcessing) {
       return new Promise((resolve) => {
         console.log(`📋 消息加入队列，等待处理...`);
-        this.messageQueue.push({ chatId, text, resolve });
+        this.messageQueue.push({ chatId, text, updateMessage, resolve: () => resolve('') });
       });
     }
 
@@ -81,20 +86,33 @@ export class BridgeService {
       // 发送消息到chat.z.ai
       await this.browserController.sendMessage(text);
       
-      // 等待响应
-      const response = await this.browserController.waitForResponse(180000);
+      // 使用流式等待响应
+      let finalResponse = '';
+      await this.browserController.waitForResponseStream(
+        async (partialResponse: string, isComplete: boolean) => {
+          // 通过Telegram实时更新消息
+          await updateMessage(partialResponse);
+          
+          if (isComplete) {
+            finalResponse = partialResponse;
+          }
+        },
+        180000
+      );
       
       // 保存对话上下文
       if (!this.conversationContext.has(chatId)) {
         this.conversationContext.set(chatId, []);
       }
       this.conversationContext.get(chatId)!.push(`User: ${text}`);
-      this.conversationContext.get(chatId)!.push(`AI: ${response}`);
+      this.conversationContext.get(chatId)!.push(`AI: ${finalResponse}`);
       
-      return response || '⚠️ 未收到有效响应';
+      return finalResponse || '⚠️ 未收到有效响应';
     } catch (error) {
       console.error('处理消息失败:', error);
-      return `❌ 处理消息时发生错误: ${error instanceof Error ? error.message : '未知错误'}`;
+      const errorMsg = `❌ 处理消息时发生错误: ${error instanceof Error ? error.message : '未知错误'}`;
+      await updateMessage(errorMsg);
+      return errorMsg;
     } finally {
       this.isProcessing = false;
       
@@ -102,8 +120,11 @@ export class BridgeService {
       const nextMessage = this.messageQueue.shift();
       if (nextMessage) {
         console.log('📋 处理队列中的下一条消息...');
-        const response = await this.handleTelegramMessage(nextMessage.chatId, nextMessage.text);
-        nextMessage.resolve(response);
+        this.handleTelegramMessage(
+          nextMessage.chatId, 
+          nextMessage.text, 
+          nextMessage.updateMessage
+        ).then(() => nextMessage.resolve());
       }
     }
   }
@@ -119,6 +140,7 @@ export class BridgeService {
     
     console.log('🎉 桥接服务已启动，等待消息...');
     console.log('📱 请在Telegram中发送消息测试');
+    console.log('✨ 支持流式输出，实时显示AI响应！');
   }
 
   async stop(): Promise<void> {
@@ -145,8 +167,18 @@ export class BridgeService {
     console.log(`🧪 测试发送消息: ${message}`);
     
     await this.browserController.sendMessage(message);
-    const response = await this.browserController.waitForResponse(120000);
     
-    return response || '未收到响应';
+    let finalResponse = '';
+    await this.browserController.waitForResponseStream(
+      async (partialResponse: string, isComplete: boolean) => {
+        console.log(`📝 部分响应 (${partialResponse.length} 字符) 完成: ${isComplete}`);
+        if (isComplete) {
+          finalResponse = partialResponse;
+        }
+      },
+      120000
+    );
+    
+    return finalResponse || '未收到响应';
   }
 }

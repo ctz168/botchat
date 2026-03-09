@@ -7,6 +7,8 @@ export interface BrowserControllerConfig {
   userDataDir?: string;
 }
 
+export type StreamCallback = (partialResponse: string, isComplete: boolean) => Promise<void>;
+
 export class BrowserController {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
@@ -486,6 +488,119 @@ export class BrowserController {
       console.error('❌ 发送消息失败:', error);
       throw error;
     }
+  }
+
+  /**
+   * 流式等待响应 - 通过回调函数实时返回部分响应
+   */
+  async waitForResponseStream(
+    onPartialResponse: StreamCallback,
+    timeout: number = 180000
+  ): Promise<string> {
+    if (!this.page) throw new Error('浏览器未初始化');
+    
+    console.log('⏳ 等待AI响应（流式模式）...');
+    
+    const startTime = Date.now();
+    let lastContent = '';
+    let lastSentContent = '';
+    let lastLength = 0;
+    let noChangeCount = 0;
+    const minUpdateInterval = 800; // 最小更新间隔（毫秒）
+    let lastUpdateTime = 0;
+    
+    // 首先发送初始状态
+    await onPartialResponse('⏳ 正在思考...', false);
+    
+    // 首先等待新消息出现
+    await this.page.waitForTimeout(2000);
+    
+    while (Date.now() - startTime < timeout) {
+      // 检查页面是否还有效
+      if (!this.page || this.page.isClosed()) {
+        console.log('⚠️ 页面已关闭');
+        await onPartialResponse(lastContent || '⚠️ 响应中断', true);
+        return this.lastResponse || lastContent;
+      }
+      
+      await this.page.waitForTimeout(500);
+      
+      try {
+        // 查找AI响应
+        const responseSelectors = [
+          '.chat-assistant .markdown-prose',
+          '.chat-assistant',
+          '[data-role="assistant"]',
+          '.assistant-message',
+          '.markdown-prose',
+          '.prose'
+        ];
+
+        let assistantMessages: any[] = [];
+        
+        for (const selector of responseSelectors) {
+          try {
+            const elements = await this.page.$$(selector);
+            if (elements.length > 0) {
+              assistantMessages = elements;
+              break;
+            }
+          } catch (e) {
+            // 继续尝试下一个选择器
+          }
+        }
+        
+        if (assistantMessages.length > 0) {
+          // 获取最后一个AI响应
+          const lastAssistant = assistantMessages[assistantMessages.length - 1];
+          
+          // 获取内容
+          let responseText = await lastAssistant.textContent() || '';
+          responseText = responseText.trim();
+          
+          if (responseText && responseText.length > 10) {
+            // 检查内容是否有变化
+            if (responseText.length !== lastLength) {
+              lastLength = responseText.length;
+              lastContent = responseText;
+              noChangeCount = 0;
+              
+              // 清理响应文本
+              const cleanedContent = this.cleanResponse(responseText);
+              
+              // 限制更新频率
+              const now = Date.now();
+              if (now - lastUpdateTime >= minUpdateInterval && cleanedContent !== lastSentContent) {
+                lastUpdateTime = now;
+                lastSentContent = cleanedContent;
+                // 通过回调发送部分响应
+                await onPartialResponse(cleanedContent, false);
+              }
+            } else {
+              // 内容长度没有变化
+              noChangeCount++;
+              if (noChangeCount >= 6) {
+                // 连续6次（3秒）长度没有变化，认为响应完成
+                console.log('✅ 响应已完成');
+                
+                // 清理并发送最终响应
+                const cleanedResponse = this.cleanResponse(lastContent);
+                this.lastResponse = cleanedResponse;
+                await onPartialResponse(cleanedResponse, true);
+                return this.lastResponse;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.log('⚠️ 获取响应时出错，继续等待...');
+      }
+    }
+    
+    console.log('⚠️ 等待响应超时');
+    const cleanedResponse = this.cleanResponse(lastContent);
+    await onPartialResponse(cleanedResponse || '⚠️ 响应超时', true);
+    return this.lastResponse || cleanedResponse;
   }
 
   async waitForResponse(timeout: number = 120000): Promise<string> {
