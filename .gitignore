@@ -1,25 +1,39 @@
-# Dependencies
+# 依赖
 node_modules/
+bun.lockb
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# 浏览器数据
 browser-data/
 
-# Environment
-.env
-*.local
+# 日志
+logs/
+*.log
+npm-debug.log*
 
-# IDE
+# 编辑器
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
 
-# OS
+# 操作系统
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
-npm-debug.log*
-
-# Build
+# 构建输出
 dist/
 build/
+
+# 临时文件
+tmp/
+temp/
+
+# 测试截图
+download/*.png
+download/*.html

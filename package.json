@@ -5,12 +5,20 @@
   "main": "index.ts",
   "scripts": {
     "start": "bun run index.ts",
-    "dev": "bun --watch run index.ts"
+    "dev": "bun --watch run index.ts",
+    "test": "bun run test-service.ts",
+    "test:login": "bun run test-login.ts",
+    "analyze": "bun run analyze-login.ts"
   },
   "dependencies": {
     "playwright": "^1.58.2",
     "telegraf": "^4.16.3"
   },
+  "devDependencies": {},
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ctz168/botchat.git"
+  }
 }

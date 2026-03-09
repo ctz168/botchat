@@ -12,8 +12,9 @@ export class BridgeService {
   private browserController: BrowserController;
   private telegramBot: TelegramBotService | null = null;
   private isInitialized: boolean = false;
-  private pendingResponses: Map<number, (response: string) => void> = new Map();
   private conversationContext: Map<number, string[]> = new Map();
+  private isProcessing: boolean = false;
+  private messageQueue: Array<{chatId: number, text: string, resolve: (response: string) => void}> = [];
 
   constructor(private config: BridgeConfig) {
     this.browserController = new BrowserController({
@@ -24,6 +25,7 @@ export class BridgeService {
 
   async initialize(): Promise<void> {
     console.log('🚀 初始化桥接服务...');
+    console.log('='.repeat(50));
 
     // 初始化浏览器
     await this.browserController.initialize();
@@ -38,7 +40,7 @@ export class BridgeService {
     );
     
     if (!loginSuccess) {
-      throw new Error('登录失败');
+      console.log('⚠️ 登录可能未完成，尝试继续...');
     }
     
     // 激活Agent模式
@@ -54,22 +56,33 @@ export class BridgeService {
     });
     
     this.isInitialized = true;
+    console.log('='.repeat(50));
     console.log('✅ 桥接服务初始化完成');
   }
 
   private async handleTelegramMessage(chatId: number, text: string): Promise<string> {
-    console.log(`📨 处理Telegram消息 [${chatId}]: ${text.substring(0, 50)}...`);
+    console.log(`📨 收到Telegram消息 [${chatId}]: ${text.substring(0, 50)}...`);
 
     if (!this.browserController.isReady()) {
       return '⚠️ 浏览器服务未就绪，请稍后重试。';
     }
+
+    // 如果正在处理消息，加入队列
+    if (this.isProcessing) {
+      return new Promise((resolve) => {
+        console.log(`📋 消息加入队列，等待处理...`);
+        this.messageQueue.push({ chatId, text, resolve });
+      });
+    }
+
+    this.isProcessing = true;
 
     try {
       // 发送消息到chat.z.ai
       await this.browserController.sendMessage(text);
       
       // 等待响应
-      const response = await this.browserController.waitForResponse(120000);
+      const response = await this.browserController.waitForResponse(180000);
       
       // 保存对话上下文
       if (!this.conversationContext.has(chatId)) {
@@ -82,6 +95,16 @@ export class BridgeService {
     } catch (error) {
       console.error('处理消息失败:', error);
       return `❌ 处理消息时发生错误: ${error instanceof Error ? error.message : '未知错误'}`;
+    } finally {
+      this.isProcessing = false;
+      
+      // 处理队列中的下一条消息
+      const nextMessage = this.messageQueue.shift();
+      if (nextMessage) {
+        console.log('📋 处理队列中的下一条消息...');
+        const response = await this.handleTelegramMessage(nextMessage.chatId, nextMessage.text);
+        nextMessage.resolve(response);
+      }
     }
   }
 
@@ -95,6 +118,7 @@ export class BridgeService {
     }
     
     console.log('🎉 桥接服务已启动，等待消息...');
+    console.log('📱 请在Telegram中发送消息测试');
   }
 
   async stop(): Promise<void> {
@@ -110,5 +134,19 @@ export class BridgeService {
       browser: this.browserController.isReady(),
       telegram: this.telegramBot !== null
     };
+  }
+
+  // 测试发送消息
+  async testSendMessage(message: string): Promise<string> {
+    if (!this.browserController.isReady()) {
+      throw new Error('浏览器服务未就绪');
+    }
+
+    console.log(`🧪 测试发送消息: ${message}`);
+    
+    await this.browserController.sendMessage(message);
+    const response = await this.browserController.waitForResponse(120000);
+    
+    return response || '未收到响应';
   }
 }

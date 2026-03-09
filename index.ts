@@ -9,13 +9,13 @@ const config = {
   headless: process.env.HEADLESS !== 'false' // 默认使用headless模式
 };
 
-console.log('='.repeat(50));
-console.log('🤖 Bot桥接服务');
-console.log('='.repeat(50));
+console.log('\n' + '='.repeat(60));
+console.log('🤖 Bot桥接服务 - Telegram ↔ chat.z.ai');
+console.log('='.repeat(60));
 console.log(`📧 登录邮箱: ${config.email}`);
-console.log(`🔑 Telegram Token: ${config.telegramToken.substring(0, 10)}...`);
-console.log(`🖥️ 无头模式: ${config.headless}`);
-console.log('='.repeat(50));
+console.log(`🔑 Telegram Token: ${config.telegramToken.substring(0, 15)}...`);
+console.log(`🖥️ 无头模式: ${config.headless ? '是' : '否'}`);
+console.log('='.repeat(60) + '\n');
 
 const bridge = new BridgeService(config);
 
@@ -30,6 +30,15 @@ process.on('SIGTERM', async () => {
   console.log('\n🛑 收到终止信号，正在关闭...');
   await bridge.stop();
   process.exit(0);
+});
+
+// 处理未捕获的错误
+process.on('uncaughtException', (error) => {
+  console.error('❌ 未捕获的错误:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ 未处理的Promise拒绝:', reason);
 });
 
 // 启动服务
