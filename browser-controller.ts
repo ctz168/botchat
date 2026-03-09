@@ -495,18 +495,25 @@ export class BrowserController {
     
     const startTime = Date.now();
     let lastContent = '';
-    let stableCount = 0;
-    let lastMessageCount = 0;
+    let lastLength = 0;
+    let noChangeCount = 0;
     
     // 首先等待新消息出现
     await this.page.waitForTimeout(2000);
     
     while (Date.now() - startTime < timeout) {
+      // 检查页面是否还有效
+      if (!this.page || this.page.isClosed()) {
+        console.log('⚠️ 页面已关闭');
+        return this.lastResponse || lastContent;
+      }
+      
       await this.page.waitForTimeout(1500);
       
       try {
         // 查找AI响应 - 使用多种选择器
         const responseSelectors = [
+          '.chat-assistant .markdown-prose',
           '.chat-assistant',
           '[data-role="assistant"]',
           '.assistant-message',
@@ -518,17 +525,15 @@ export class BrowserController {
         let assistantMessages: any[] = [];
         
         for (const selector of responseSelectors) {
-          const elements = await this.page.$$(selector);
-          if (elements.length > 0) {
-            assistantMessages = elements;
-            console.log(`📝 使用选择器 ${selector} 找到 ${elements.length} 条消息`);
-            break;
+          try {
+            const elements = await this.page.$$(selector);
+            if (elements.length > 0) {
+              assistantMessages = elements;
+              break;
+            }
+          } catch (e) {
+            // 继续尝试下一个选择器
           }
-        }
-        
-        if (assistantMessages.length > lastMessageCount) {
-          lastMessageCount = assistantMessages.length;
-          console.log(`📝 检测到新消息 (共${lastMessageCount}条)`);
         }
         
         if (assistantMessages.length > 0) {
@@ -539,32 +544,58 @@ export class BrowserController {
           let responseText = await lastAssistant.textContent() || '';
           responseText = responseText.trim();
           
-          // 检查是否还在生成中（查找loading或thinking指示器）
-          const loadingIndicator = await this.page.$('.loading, .thinking, [class*="loading"], [class*="thinking"]');
-          const isLoading = loadingIndicator !== null;
-          
           if (responseText && responseText.length > 10) {
-            if (responseText !== lastContent) {
+            // 检查内容是否有变化
+            if (responseText.length !== lastLength) {
+              lastLength = responseText.length;
               lastContent = responseText;
-              stableCount = 0;
-              console.log(`📝 响应更新中... (${responseText.length} 字符)${isLoading ? ' [生成中...]' : ''}`);
-            } else if (!isLoading) {
-              stableCount++;
-              if (stableCount >= 2) {
-                console.log('✅ 响应已稳定');
-                this.lastResponse = responseText;
+              noChangeCount = 0;
+              if (Date.now() - startTime > 5000) { // 只在5秒后打印更新日志
+                console.log(`📝 响应生成中... (${responseText.length} 字符)`);
+              }
+            } else {
+              // 内容长度没有变化
+              noChangeCount++;
+              if (noChangeCount >= 4) {
+                // 连续4次（6秒）长度没有变化，认为响应完成
+                console.log('✅ 响应已完成');
+                // 清理响应文本
+                const cleanedResponse = this.cleanResponse(responseText);
+                this.lastResponse = cleanedResponse;
                 return this.lastResponse;
               }
             }
           }
+        } else {
+          // 没有找到响应，等待
+          noChangeCount++;
         }
       } catch (e) {
         console.log('⚠️ 获取响应时出错，继续等待...');
+        // 短暂等待后继续
+        await this.page.waitForTimeout(500);
       }
     }
     
-    console.log('⚠️ 等待响应超时，返回最后获取的内容');
-    return this.lastResponse || lastContent;
+    console.log('⚠️ 等待响应超时，返回已获取的内容');
+    const cleanedResponse = this.cleanResponse(lastContent);
+    return this.lastResponse || cleanedResponse;
+  }
+
+  private cleanResponse(text: string): string {
+    if (!text) return '';
+    
+    // 移除思考过程标签和内容（如果有的话）
+    // 保留实际回复内容
+    let cleaned = text;
+    
+    // 如果包含"思考过程"，尝试提取实际回复
+    const thinkingMatch = cleaned.match(/思考过程[\s\S]*?(?:\n\n|\n)([\s\S]+)$/);
+    if (thinkingMatch) {
+      cleaned = thinkingMatch[1].trim();
+    }
+    
+    return cleaned.trim();
   }
 
   async getLatestResponse(): Promise<string> {
